@@ -32,8 +32,16 @@ pub trait RelationOneField: Load<Output = Self> {
     const NULLABLE: bool;
 
     /// Reloads this relation field from a returned value.
-    fn reload(target: &mut Self, value: stmt::Value) -> crate::Result<()> {
-        <Self as Load>::reload(target, value)
+    fn reload(target: &mut Self, value: stmt::Value) -> crate::Result<()>
+    where
+        Self: Sized,
+    {
+        if matches!(value, stmt::Value::SparseRecord(_)) {
+            <Self as Load>::reload(target, value)
+        } else {
+            *target = Self::load(value)?;
+            Ok(())
+        }
     }
 
     /// Narrow a list query targeting the related model into the appropriate

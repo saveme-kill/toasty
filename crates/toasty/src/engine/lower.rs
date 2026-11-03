@@ -77,7 +77,7 @@ impl Engine {
             update_returning: IndexMap::new(),
         };
 
-        state.lower_stmt(stmt::ExprContext::new(schema), None, stmt);
+        state.lower_stmt(stmt::ExprContext::new(schema), None, stmt, &[]);
 
         if let Some(err) = state.errors.into_iter().next() {
             return Err(err);
@@ -93,6 +93,7 @@ impl LoweringState<'_> {
         expr_cx: stmt::ExprContext,
         row_index: Option<usize>,
         mut stmt: stmt::Statement,
+        inputs: &[hir::StmtId],
     ) -> hir::StmtId {
         // App-level rewrites that lowering depends on. `Source::Model { via }`
         // must be converted to a WHERE filter before the lowering walk
@@ -119,6 +120,15 @@ impl LoweringState<'_> {
                 .map(|&dep| (dep, hir::DepKind::Statement))
                 .collect(),
         );
+        for &input in inputs {
+            self.hir[stmt_id].args.push(hir::Arg::Sub {
+                stmt_id: input,
+                returning: false,
+                input: Cell::new(None),
+                batch_load_index: Cell::new(None),
+            });
+            self.hir[stmt_id].add_dep(input, hir::DepKind::Statement);
+        }
         let scope_id = self.scopes.push(Scope { stmt_id, row_index });
         let mut collect_dependencies = None;
 
@@ -587,13 +597,23 @@ fn take_list_items(e: stmt::Expr) -> Option<Vec<stmt::Expr>> {
 
 impl LowerStatement<'_, '_> {
     fn new_dependency(&mut self, stmt: impl Into<stmt::Statement>) -> hir::StmtId {
+        self.new_dependency_with_inputs(stmt, &[])
+    }
+
+    fn new_dependency_with_inputs(
+        &mut self,
+        stmt: impl Into<stmt::Statement>,
+        inputs: &[hir::StmtId],
+    ) -> hir::StmtId {
         let row_index = match self.cx {
             LoweringContext::Insert(_, row_index) => row_index,
             LoweringContext::Returning(row_index) => row_index,
             _ => None,
         };
 
-        let stmt_id = self.state.lower_stmt(self.expr_cx, row_index, stmt.into());
+        let stmt_id = self
+            .state
+            .lower_stmt(self.expr_cx, row_index, stmt.into(), inputs);
 
         if let Some(dependencies) = &mut self.collect_dependencies {
             dependencies.insert(stmt_id);
@@ -773,7 +793,7 @@ impl visit_mut::VisitMut for LowerStatement<'_, '_> {
                 if self.capability().sql() {
                     self.visit_expr_in_subquery_mut(e);
 
-                    self.lower_in_subquery_operands(
+                    self.lower_in_operands(
                         &mut e.expr,
                         e.query.returning_mut_unwrap().as_project_mut_unwrap(),
                     );
@@ -811,7 +831,7 @@ impl visit_mut::VisitMut for LowerStatement<'_, '_> {
 
                     self.track_dependency(target_id);
 
-                    self.lower_in_subquery_operands(
+                    self.lower_in_operands(
                         &mut e.expr,
                         e.query.returning_mut_unwrap().as_project_mut_unwrap(),
                     );
@@ -1356,7 +1376,7 @@ impl visit_mut::VisitMut for LowerStatement<'_, '_> {
         // Plan relations
         lower.plan_stmt_update_relations(
             &mut stmt.assignments,
-            &stmt.filter,
+            &mut stmt.filter,
             &mut stmt.returning,
             returning_changed,
         );
@@ -1667,13 +1687,13 @@ impl<'a, 'b> LowerStatement<'a, 'b> {
         }
     }
 
-    /// Lower the LHS and RHS of an `IN (subquery)` in place. When both sides
+    /// Lower the LHS and one RHS item of an `IN` predicate in place. When both sides
     /// are records of equal arity (as produced for composite-key FK
     /// comparisons) the per-element lowering is applied pair-wise so
     /// element-level transforms (NULLs, casts) still fire while the
     /// surrounding `IN` is preserved. Otherwise a single binary-op lowering
     /// is applied across both sides.
-    fn lower_in_subquery_operands(&mut self, lhs: &mut stmt::Expr, rhs: &mut stmt::Expr) {
+    fn lower_in_operands(&mut self, lhs: &mut stmt::Expr, rhs: &mut stmt::Expr) {
         if let (stmt::Expr::Record(lhs_rec), stmt::Expr::Record(rhs_rec)) = (&mut *lhs, &mut *rhs)
             && lhs_rec.len() == rhs_rec.len()
         {
@@ -1729,8 +1749,7 @@ impl<'a, 'b> LowerStatement<'a, 'b> {
     fn lower_mapped_in_list(&mut self, expr: &mut stmt::Expr, map: &mut stmt::ExprMap) {
         assert!(map.base.is_arg(), "TODO");
 
-        let lowered = self.lower_expr_binary_op(stmt::BinaryOp::Eq, expr, &mut map.map);
-        assert!(lowered.is_none(), "TODO");
+        self.lower_in_operands(expr, &mut map.map);
     }
 
     fn lower_cast_in_list(&mut self, expr: &mut stmt::Expr, list: &mut stmt::Expr) {
@@ -2154,6 +2173,11 @@ impl<'a, 'b> LowerStatement<'a, 'b> {
                 *value = casted;
             }
             stmt::Expr::Project(expr_project) => {
+                if expr_project.base.is_arg() {
+                    let value = expr.take();
+                    *expr = stmt::Expr::cast(value, target_ty.clone());
+                    return;
+                }
                 // A projection into an embedded field's lowered record —
                 // e.g. the key of a relation stored in an embedded type, as
                 // the LHS of a lifted FK IN-subquery. Collapse the

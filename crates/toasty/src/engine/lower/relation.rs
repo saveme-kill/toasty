@@ -234,11 +234,51 @@ impl LowerStatement<'_, '_> {
     pub(super) fn plan_stmt_update_relations(
         &mut self,
         assignments: &mut stmt::Assignments,
-        filter: &stmt::Filter,
+        filter: &mut stmt::Filter,
         returning: &mut Option<stmt::Returning>,
         returning_changed: bool,
     ) {
         let model = self.expr_cx.target().as_model_unwrap();
+
+        // Read the source keys and current foreign keys before either model is
+        // changed. In particular, a related update may change a field used by
+        // the original source filter.
+        let related: Vec<_> = model
+            .fields
+            .iter()
+            .filter(|field| {
+                matches!(assignments.get(&[field.id.index]),
+                Some(stmt::Assignment::Set(stmt::Expr::Stmt(expr))) if expr.stmt.is_update())
+            })
+            .collect();
+        let primary_key_len = model.primary_key_fields().count();
+        let snapshot = if related.is_empty() {
+            None
+        } else {
+            let primary_key = super::key_field_refs(0, model.primary_key_fields().map(|f| f.id));
+            let mut keys: Vec<_> = model
+                .primary_key_fields()
+                .map(|field| stmt::Expr::ref_self_field(field.id))
+                .collect();
+            keys.extend(related.iter().flat_map(|field| {
+                let rel = field.ty.as_belongs_to_unwrap();
+                rel.foreign_key
+                    .fields
+                    .iter()
+                    .map(|fk| stmt::Expr::ref_self_field(fk.source))
+            }));
+            let mut selection = stmt::Query::new_select(model.id, filter.clone());
+            selection.body.as_select_mut_unwrap().returning =
+                stmt::Returning::Project(stmt::Expr::record(keys));
+            let snapshot = self.new_dependency(selection);
+            let input = self.new_dependency_arg(self.scope_stmt_id(), snapshot);
+            *filter = stmt::Expr::in_list(
+                primary_key,
+                stmt::Expr::map(input, snapshot_key(0, primary_key_len)),
+            )
+            .into();
+            Some(snapshot)
+        };
 
         for (projection, assignment) in assignments.iter_mut() {
             let schema = &self.schema().app;
@@ -250,6 +290,7 @@ impl LowerStatement<'_, '_> {
             }
         }
 
+        let mut related_dependencies = IndexSet::new();
         for (i, field) in model.fields.iter().enumerate() {
             if !field.is_relation() {
                 continue;
@@ -258,6 +299,47 @@ impl LowerStatement<'_, '_> {
             let Some(assignment) = assignments.take(&[i]) else {
                 continue;
             };
+
+            if let stmt::Assignment::Set(stmt::Expr::Stmt(expr)) = &assignment
+                && let stmt::Statement::Update(update) = &*expr.stmt
+            {
+                let rel = field.ty.as_belongs_to_unwrap();
+                let position = primary_key_len
+                    + related
+                        .iter()
+                        .take_while(|f| f.id != field.id)
+                        .map(|f| f.ty.as_belongs_to_unwrap().foreign_key.fields.len())
+                        .sum::<usize>();
+                let target =
+                    super::key_field_refs(0, rel.foreign_key.fields.iter().map(|fk| fk.target));
+                let mut update = update.clone();
+                update.filter.add_filter(stmt::Expr::in_list(
+                    target,
+                    stmt::Expr::map(
+                        stmt::Expr::arg(0),
+                        snapshot_key(position, rel.foreign_key.fields.len()),
+                    ),
+                ));
+                update.returning = None;
+                self.with_dependencies(related_dependencies.clone(), |lower| {
+                    let id = lower.new_dependency_with_inputs(update, &[snapshot.unwrap()]);
+                    related_dependencies.insert(id);
+                });
+                if !field.deferred {
+                    let expr = self
+                        .lower_returning()
+                        .build_relation_subquery(field.id.index);
+                    UpdateRelationSource {
+                        model,
+                        filter,
+                        assignments,
+                        returning,
+                        returning_changed,
+                    }
+                    .set_returning_field(field, expr);
+                }
+                continue;
+            }
 
             // A `Batch` carries a sequence of discrete ops on the same
             // projection, built by the `stmt::apply` surface API. Dispatch
@@ -988,6 +1070,17 @@ impl RelationSource for InsertRelationSource<'_> {
 
     fn needs_existence_check(&self) -> bool {
         false
+    }
+}
+
+/// Project a scalar or composite key from one row of a related-update snapshot.
+fn snapshot_key(start: usize, len: usize) -> stmt::Expr {
+    if len == 1 {
+        stmt::Expr::project(stmt::Expr::arg(0), [start])
+    } else {
+        stmt::Expr::record(
+            (start..start + len).map(|index| stmt::Expr::project(stmt::Expr::arg(0), [index])),
+        )
     }
 }
 

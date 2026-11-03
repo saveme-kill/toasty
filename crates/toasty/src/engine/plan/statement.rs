@@ -646,8 +646,9 @@ impl<'a, 'b> PlanStatement<'a, 'b> {
                     let (index, _) = self.load_data.inputs.insert_full(node_id);
                     data_load_input.set(Some(index));
 
-                    // If the target statement is a query, then we are in a batch-load scenario.
-                    if target_stmt_info.stmt().is_query() {
+                    // Queries and updates both return row sets. Load related
+                    // records for every returned row, including multi-row updates.
+                    if target_stmt_info.stmt().is_query() || target_stmt_info.stmt().is_update() {
                         debug_assert!(insert_row.is_none());
 
                         let (batch_load_table_ref_index, _) =
@@ -896,9 +897,21 @@ impl<'a, 'b> PlanStatement<'a, 'b> {
 
     fn plan_data_loading(
         &mut self,
-        stmt: stmt::Statement,
+        mut stmt: stmt::Statement,
         returning: &mut Returning,
     ) -> Result<mir::NodeId> {
+        // Relation-only updates may still need source columns for eager
+        // reloads. Read those rows instead of returning an empty sparse record.
+        if let stmt::Statement::Update(update) = &stmt
+            && update.assignments.is_empty()
+            && update.condition.is_none()
+            && !self.load_data.select_items.is_empty()
+            && self.planner.engine.capability().sql()
+        {
+            stmt = stmt::Query::new_select(update.target.as_table_unwrap(), update.filter.clone())
+                .into();
+        }
+
         // COUNT(*) is SQL-only
         if self.load_data.select_items.contains(&SelectItem::CountStar)
             && !self.planner.engine.capability().sql()

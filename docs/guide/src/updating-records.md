@@ -236,6 +236,62 @@ toasty::update!(doc {
 > **Runnable example:** [`crm-embedded`] flattens embedded structs and enums, keys a model with a newtype, and patches embedded fields.
 
 
+## Updating a belongs-to record
+
+For a root `#[belongs_to]` field named `device`, the update builder provides
+`update_device`. Its closure receives the related model's update builder:
+
+```rust
+# use toasty::Model;
+# #[derive(Debug, toasty::Model)]
+# struct UserDevice {
+#     #[key]
+#     id: i64,
+#     #[auto]
+#     updated_at: jiff::Timestamp,
+# }
+# #[derive(Debug, toasty::Model)]
+# struct RefreshToken {
+#     #[key]
+#     id: i64,
+#     is_revoked: bool,
+#     #[index]
+#     device_id: i64,
+#     #[belongs_to(key = device_id, references = id)]
+#     device: toasty::Deferred<UserDevice>,
+# }
+# async fn __example(mut db: toasty::Db, token_id: i64) -> toasty::Result<()> {
+RefreshToken::update_by_id(token_id)
+    .is_revoked(true)
+    .update_device(|device| device)
+    .exec(&mut db)
+    .await?;
+# Ok(())
+# }
+```
+
+Returning the builder unchanged applies the related model's automatic updates,
+including `#[auto] updated_at`. Setters in the closure can update other fields.
+The related update must contain at least one explicit or automatic assignment.
+
+Toasty reads the matching source keys and their current foreign keys before
+writing either model. If no source matches, or an optional relation is absent,
+the related update does nothing. A related record shared by several matching
+sources is updated once per relation field. The updates execute atomically on
+SQL backends; a failure rolls back both models. This operation may execute
+multiple database statements.
+
+Instance updates refresh eager relations and unload deferred relations. The
+foreign keys keep their values unless explicitly assigned in the outer update.
+The generated `update_device` method is omitted if the model already has a
+field named `update_device`.
+
+This API supports one level of root `belongs_to` relations on SQL backends.
+DynamoDB, source conditions (including instance updates with `#[version]`),
+changes to the referenced key, nested relation mutations in the closure, and
+combining related updates with other relation mutations return an
+`unsupported_feature` error.
+
 ## Inserting has-many children
 
 A bracket-of-braces literal on a [has-many](./has-many.md) field

@@ -82,6 +82,7 @@ pub mod relation_belongs_to_inferred;
 pub mod relation_belongs_to_null_fk;
 pub mod relation_belongs_to_one_way;
 pub mod relation_belongs_to_self_referential;
+pub mod relation_belongs_to_update;
 pub mod relation_chain;
 pub mod relation_chain_composite_key;
 pub mod relation_eager;

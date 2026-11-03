@@ -271,6 +271,9 @@ impl stmt::Visit for Verify<'_, '_> {
     }
 
     fn visit_stmt_update(&mut self, i: &stmt::Update) {
+        if !self.verify_related_updates(i) {
+            return;
+        }
         stmt::visit::visit_stmt_update(self, i);
 
         // A rejected assignment may be the only one requested, so there is
@@ -298,6 +301,96 @@ impl stmt::Visit for Verify<'_, '_> {
 }
 
 impl Verify<'_, '_> {
+    fn verify_related_updates(&mut self, update: &stmt::Update) -> bool {
+        let related: Vec<_> = update
+            .assignments
+            .iter()
+            .filter_map(|(path, assignment)| {
+                let stmt::Assignment::Set(stmt::Expr::Stmt(expr)) = assignment else {
+                    return None;
+                };
+                let stmt::Statement::Update(child) = &*expr.stmt else {
+                    return None;
+                };
+                Some((path, child))
+            })
+            .collect();
+        if related.is_empty() {
+            return true;
+        }
+        let reason = if !self.capability.sql() {
+            Some("related updates require a SQL backend")
+        } else if update.condition.is_some() {
+            Some("related updates with a source condition are not yet supported")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            self.record(Error::unsupported_feature(reason));
+            return false;
+        }
+
+        let model = self.schema.app.model(update.target.model_id_unwrap());
+        for (path, child) in &related {
+            let Some(app::Resolved::Field(field)) = self.schema.app.resolve(model, path) else {
+                self.record(Error::invalid_statement("invalid related update field"));
+                return false;
+            };
+            let app::FieldTy::BelongsTo(relation) = &field.ty else {
+                self.record(Error::unsupported_feature(
+                    "related updates require a belongs_to field",
+                ));
+                return false;
+            };
+            if path.len() != 1 || child.target.model_id() != Some(relation.target) {
+                self.record(Error::invalid_statement(
+                    "related update target does not match the relation",
+                ));
+                return false;
+            }
+            if child.assignments.is_empty() && child.assignments.unsupported().is_empty() {
+                self.record(Error::invalid_statement(
+                    "related update has no field assignments or automatic updates",
+                ));
+                return false;
+            }
+            if relation.foreign_key.fields.iter().any(|fk| {
+                child
+                    .assignments
+                    .keys()
+                    .any(|path| path.as_slice().first() == Some(&fk.target.index))
+            }) {
+                self.record(Error::unsupported_feature(
+                    "related updates cannot change the referenced key",
+                ));
+                return false;
+            }
+            let target = self.schema.app.model(relation.target);
+            if child.assignments.keys().any(|path| {
+                matches!(self.schema.app.resolve(target, path),
+                    Some(app::Resolved::Field(field)) if field.is_relation())
+            }) {
+                self.record(Error::unsupported_feature(
+                    "nested relation mutations inside a related update are not yet supported",
+                ));
+                return false;
+            }
+        }
+        if update.assignments.keys().any(|path| {
+            matches!(self.schema.app.resolve(model, path),
+                Some(app::Resolved::Field(field)) if field.is_relation())
+                && !related
+                    .iter()
+                    .any(|(related_path, _)| *related_path == path)
+        }) {
+            self.record(Error::unsupported_feature(
+                "related updates cannot be combined with other relation mutations",
+            ));
+            return false;
+        }
+        true
+    }
+
     fn record(&mut self, err: Error) {
         if self.error.is_none() {
             *self.error = Some(err);
@@ -608,6 +701,16 @@ impl<'a> VerifyExpr<'a, '_> {
 }
 
 impl stmt::Visit for VerifyExpr<'_, '_> {
+    fn visit_expr_stmt(&mut self, i: &stmt::ExprStmt) {
+        // A nested mutation has its own model and assignment projections.
+        Verify {
+            schema: self.schema,
+            capability: self.capability,
+            error: &mut *self.error,
+        }
+        .visit(&*i.stmt);
+    }
+
     fn visit_expr_and(&mut self, i: &stmt::ExprAnd) {
         stmt::visit::visit_expr_and(self, i);
 
@@ -795,6 +898,31 @@ mod tests {
             lhs: Box::new(Expr::arg(0)),
             rhs: Box::new(rhs),
         })
+    }
+
+    fn related_update_statement() -> stmt::Update {
+        let mut child = stmt::Query::new_select(ModelId(1), true).update();
+        child.assignments.set(0, "new");
+        child.returning = Some(stmt::Returning::Changed);
+        let mut parent = stmt::Query::new_select(ModelId(0), true).update();
+        parent.assignments.set(0, Expr::stmt(child));
+        parent
+    }
+
+    #[test]
+    fn related_updates_rejected_on_dynamodb() {
+        let error = verify_with(&Capability::DYNAMODB, related_update_statement().into())
+            .expect_err("related updates require SQL");
+        assert!(error.is_unsupported_feature());
+    }
+
+    #[test]
+    fn related_updates_reject_source_conditions() {
+        let mut update = related_update_statement();
+        update.condition = stmt::Condition::new(false);
+        let error = verify_with(&Capability::SQLITE, update.into())
+            .expect_err("related updates cannot bypass a source condition");
+        assert!(error.is_unsupported_feature());
     }
 
     #[test]

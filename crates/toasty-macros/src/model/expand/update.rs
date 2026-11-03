@@ -2,7 +2,7 @@ use super::{Expand, util};
 use crate::model::schema::FieldTy;
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 
 impl Expand<'_> {
     /// Generate update builder for embedded structs
@@ -140,6 +140,43 @@ impl Expand<'_> {
             .collect()
     }
 
+    fn expand_update_relation_methods(&self) -> TokenStream {
+        let toasty = &self.toasty;
+        let vis = &self.model.vis;
+
+        self.model.fields.iter().enumerate().filter_map(|(index, field)| {
+            let FieldTy::BelongsTo(rel) = &field.ty else {
+                return None;
+            };
+            let method_name = field.name.with_prefix("update");
+            let method = format_ident!("{method_name}");
+            // Preserve setters for models with a field named `update_<relation>`.
+            if self.model.fields.iter().any(|field| field.name.as_str() == method_name) {
+                return None;
+            }
+            let ty = &rel.ty;
+            let target = quote!(<#ty as #toasty::RelationOneField>::Target);
+            let builder = quote!(<#target as #toasty::Model>::UpdateQuery);
+            let index = util::int(index);
+
+            Some(quote! {
+                /// Update the currently associated record in the same operation.
+                ///
+                /// The closure receives an update builder with automatic field
+                /// updates applied. A missing optional relation is skipped.
+                /// Requires a SQL backend. Source conditions, referenced-key
+                /// changes, and nested relation mutations are unsupported.
+                #vis fn #method(mut self, update: impl ::core::ops::FnOnce(#builder) -> #builder) -> Self {
+                    use #toasty::IntoStatement as _;
+                    let builder: #builder = #toasty::stmt::Query::<#toasty::List<#target>>::all().into();
+                    let stmt = update(builder).into_statement().into_untyped();
+                    self.assignments.set(#index, #toasty::core::stmt::Expr::stmt(stmt));
+                    self
+                }
+            })
+        }).collect()
+    }
+
     pub(super) fn expand_update_builder(&self) -> TokenStream {
         let toasty = &self.toasty;
         let vis = &self.model.vis;
@@ -149,6 +186,7 @@ impl Expand<'_> {
         let field_struct_ident = &self.model.kind.as_root_unwrap().field_struct_ident;
         let target_ty = util::ident("T");
         let builder_methods = self.expand_update_field_methods(false);
+        let relation_methods = self.expand_update_relation_methods();
         let update_default_stmts = self.expand_update_default_stmts();
 
         quote! {
@@ -181,6 +219,7 @@ impl Expand<'_> {
                 }
 
                 #builder_methods
+                #relation_methods
 
                 fn build_stmt(&mut self) -> #toasty::core::stmt::Statement {
                     use #toasty::UpdateTarget as _;
