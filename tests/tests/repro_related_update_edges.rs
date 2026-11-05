@@ -232,33 +232,33 @@ macro_rules! backend_tests {
             #[tokio::test]
             #[ignore = "reproduces a known bug; requires a fresh database"]
             async fn cross_relation_keys() -> toasty::Result<()> {
-                super::cross_relation_keys(&$url).await
+                super::cross_relation_keys($url).await
             }
 
             #[tokio::test]
             #[ignore = "reproduces a known bug; requires a fresh database"]
             async fn self_relation_primary_key() -> toasty::Result<()> {
-                super::self_relation_primary_key(&$url).await
+                super::self_relation_primary_key($url).await
             }
 
             #[tokio::test]
             #[ignore = "reproduces a known bug; requires a fresh database"]
             async fn nested_write_without_source() -> toasty::Result<()> {
-                super::nested_write_without_source(&$url).await
+                super::nested_write_without_source($url).await
             }
         }
     };
 }
 
 #[cfg(feature = "sqlite")]
-backend_tests!(sqlite, "sqlite::memory:".to_owned());
+backend_tests!(sqlite, "sqlite::memory:");
 #[cfg(feature = "postgresql")]
 backend_tests!(
     postgresql,
-    std::env::var("REPRO_POSTGRES_URL").expect("REPRO_POSTGRES_URL required")
+    &std::env::var("REPRO_POSTGRES_URL").expect("REPRO_POSTGRES_URL required")
 );
 #[cfg(feature = "mysql")]
 backend_tests!(
     mysql,
-    std::env::var("REPRO_MYSQL_URL").expect("REPRO_MYSQL_URL required")
+    &std::env::var("REPRO_MYSQL_URL").expect("REPRO_MYSQL_URL required")
 );
