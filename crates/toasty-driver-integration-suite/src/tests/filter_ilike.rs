@@ -152,5 +152,12 @@ pub async fn ilike_unsupported_without_native_operator(t: &mut Test) -> Result<(
 
     assert!(err.is_unsupported_feature(), "unexpected error: {err:?}");
 
+    let err = Item::all()
+        .order_by(Item::fields().name().ilike("al%".to_string()).desc())
+        .exec(&mut db)
+        .await
+        .unwrap_err();
+    assert!(err.is_unsupported_feature(), "{err}");
+
     Ok(())
 }

@@ -271,6 +271,51 @@ pub async fn first_respects_offset(t: &mut Test) -> Result<()> {
     Ok(())
 }
 
+#[driver_test(scenario(crate::scenarios::user_with_active), requires(sql))]
+pub async fn order_by_computed_expression(t: &mut Test) -> Result<()> {
+    use toasty::stmt::IntoExpr;
+
+    let mut db = setup(t).await;
+
+    toasty::create!(User::[
+        { name: "Alice", age: 20, active: true },
+        { name: "Bob", age: 30, active: false },
+        { name: "Carol", age: 20, active: false },
+        { name: "Dave", age: 40, active: true },
+    ])
+    .exec(&mut db)
+    .await?;
+
+    let fields = User::fields();
+    let priority = fields.active().into_expr().or(fields.age().ge(30));
+    for (sort_key, expected) in [
+        (priority.clone().asc(), ["Carol", "Alice", "Bob", "Dave"]),
+        (priority.desc(), ["Alice", "Bob", "Dave", "Carol"]),
+    ] {
+        let users = User::all()
+            .order_by((sort_key, fields.name().asc()))
+            .exec(&mut db)
+            .await?;
+        let names: Vec<_> = users.iter().map(|user| user.name.as_str()).collect();
+        assert_eq!(names, expected);
+    }
+    Ok(())
+}
+
+#[driver_test(scenario(crate::scenarios::user_with_age), requires(sql))]
+pub async fn cursor_pagination_rejects_computed_order(t: &mut Test) -> Result<()> {
+    let mut db = setup(t).await;
+    let fields = User::fields();
+    let err = User::all()
+        .order_by(fields.age().gt(30).desc())
+        .paginate(2)
+        .exec(&mut db)
+        .await
+        .unwrap_err();
+    assert!(err.is_unsupported_feature(), "{err}");
+    Ok(())
+}
+
 #[driver_test(scenario(crate::scenarios::user_with_age), requires(sql))]
 pub async fn order_by_multiple_columns_composes(t: &mut Test) -> Result<()> {
     let mut db = setup(t).await;

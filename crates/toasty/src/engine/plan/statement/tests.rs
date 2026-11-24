@@ -23,6 +23,22 @@ struct Item {
 }
 
 #[test]
+fn dynamodb_rejects_computed_order_on_a_partition_query() -> Result<()> {
+    use crate::stmt::IntoStatement;
+
+    let app = app::Schema::from_macro([Item::schema()])?;
+    let schema = Builder::new().build(app, &Capability::DYNAMODB)?;
+    let engine = Engine::new(Arc::new(schema), &Capability::DYNAMODB);
+
+    let fields = Item::fields();
+    let query = Item::filter(fields.group().eq("group")).order_by(fields.name().eq("A").desc());
+    let hir = engine.lower_stmt(query.into_statement().into_untyped())?;
+    let err = engine.plan_hir_statement(hir).unwrap_err();
+    assert!(err.is_unsupported_feature(), "{err}");
+    Ok(())
+}
+
+#[test]
 fn mutation_query_pk_binds_key_and_row_filters_to_their_dependencies() -> Result<()> {
     let app = app::Schema::from_macro([Item::schema()])?;
     let schema = Builder::new().build(app, &Capability::DYNAMODB)?;

@@ -416,6 +416,11 @@ pub trait VisitMut {
         visit_order_by_mut(self, i);
     }
 
+    /// Visits a query's ordering with the body that its expressions reference.
+    fn visit_query_order_by_mut(&mut self, _body: &ExprSet, order_by: &mut OrderBy) {
+        self.visit_order_by_mut(order_by);
+    }
+
     /// Visits an [`OrderByExpr`] node mutably.
     ///
     /// The default implementation delegates to [`visit_order_by_expr_mut`].
@@ -791,6 +796,10 @@ impl<V: VisitMut> VisitMut for &mut V {
 
     fn visit_order_by_mut(&mut self, i: &mut OrderBy) {
         VisitMut::visit_order_by_mut(&mut **self, i);
+    }
+
+    fn visit_query_order_by_mut(&mut self, body: &ExprSet, order_by: &mut OrderBy) {
+        VisitMut::visit_query_order_by_mut(&mut **self, body, order_by);
     }
 
     fn visit_order_by_expr_mut(&mut self, i: &mut OrderByExpr) {
@@ -1606,7 +1615,7 @@ where
     v.visit_expr_set_mut(&mut node.body);
 
     if let Some(order_by) = &mut node.order_by {
-        v.visit_order_by_mut(order_by);
+        v.visit_query_order_by_mut(&node.body, order_by);
     }
 
     if let Some(limit) = &mut node.limit {

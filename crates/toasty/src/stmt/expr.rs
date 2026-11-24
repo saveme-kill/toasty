@@ -70,6 +70,22 @@ impl<T> Expr<T> {
         }
     }
 
+    /// Sort by the value of this expression in ascending order.
+    pub fn asc(self) -> stmt::OrderByExpr {
+        stmt::OrderByExpr {
+            expr: self.untyped,
+            order: Some(stmt::Direction::Asc),
+        }
+    }
+
+    /// Sort by the value of this expression in descending order.
+    pub fn desc(self) -> stmt::OrderByExpr {
+        stmt::OrderByExpr {
+            expr: self.untyped,
+            order: Some(stmt::Direction::Desc),
+        }
+    }
+
     /// Test whether this expression equals `rhs`.
     ///
     /// When either side selects an enum variant (a path such as

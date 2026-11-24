@@ -35,8 +35,24 @@ let items = Item::all()
 # }
 ```
 
-`Item::fields().order()` returns a field path. Calling `.asc()` or `.desc()` on
-it produces an ordering expression that `.order_by()` accepts.
+On SQL databases, you can also sort by a computed expression. Here, an item
+that is either archived or pinned sorts ahead of items with neither flag.
+The ID orders items with the same priority.
+
+```rust
+# #[derive(Debug, toasty::Model)]
+# struct Item {
+#     #[key]
+#     id: i64,
+#     archived: bool,
+#     pinned: bool,
+# }
+use toasty::stmt::IntoExpr;
+
+let fields = Item::fields();
+let priority = fields.archived().into_expr().or(fields.pinned());
+let query = Item::all().order_by((priority.desc(), fields.id().asc()));
+```
 
 ### Sorting by multiple fields
 
@@ -190,8 +206,8 @@ explanation.
 
 ## Cursor-based pagination
 
-`.paginate(per_page)` splits results into pages. It requires `.order_by()` and
-returns a `Page` instead of a `Vec`:
+`.paginate(per_page)` splits results into pages and returns a `Page`. SQL
+cursor pagination requires an `.order_by()` whose keys resolve to columns.
 
 ```rust
 # use toasty::Model;

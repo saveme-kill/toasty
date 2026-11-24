@@ -1308,8 +1308,9 @@ impl<'a, 'b> PlanStatement<'a, 'b> {
                     .insert_full(SelectItem::from(expr_ref));
                 cursor_column_indices.push(index);
             } else {
-                // Complex expression in ORDER BY - can't handle yet
-                return Ok(None);
+                return Err(toasty_core::Error::unsupported_feature(
+                    "cursor pagination requires ORDER BY on columns",
+                ));
             }
         }
 
@@ -1574,6 +1575,15 @@ impl<'a, 'b> PlanStatement<'a, 'b> {
     // ===== NoSQL execution =====
 
     fn plan_data_loading_nosql(&mut self, stmt: stmt::Statement) -> Result<mir::NodeId> {
+        if let Some(order_by) = stmt.as_query().and_then(|q| q.order_by.as_ref())
+            && order_by.exprs.iter().any(|key| !key.expr.is_column())
+        {
+            return Err(toasty_core::Error::unsupported_feature(format!(
+                "{} does not support ORDER BY on computed expressions",
+                self.planner.engine.capability().driver_name
+            )));
+        }
+
         if stmt.is_insert() {
             debug_assert!(self.load_data.select_items.is_empty());
         }

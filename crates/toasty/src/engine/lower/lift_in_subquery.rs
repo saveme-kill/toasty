@@ -142,6 +142,10 @@ fn key_fields(expr: &stmt::Expr) -> &[stmt::Expr] {
 }
 
 impl VisitMut for LiftInSubquery<'_> {
+    fn visit_query_order_by_mut(&mut self, body: &stmt::ExprSet, order_by: &mut stmt::OrderBy) {
+        self.scope(body).visit_order_by_mut(order_by);
+    }
+
     fn visit_expr_mut(&mut self, expr: &mut stmt::Expr) {
         // Apply lifts pre-children: the rewrites pattern-match on app-
         // level `Reference::Field` to a relation, and the children walk

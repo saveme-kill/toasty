@@ -194,6 +194,10 @@ impl VisitMut for Simplify<'_> {
         self.simplify_stmt_query_when_empty(stmt);
     }
 
+    fn visit_query_order_by_mut(&mut self, body: &stmt::ExprSet, order_by: &mut stmt::OrderBy) {
+        self.scope(body).visit_order_by_mut(order_by);
+    }
+
     fn visit_source_mut(&mut self, source: &mut stmt::Source) {
         // A `Source::Table` JOIN constraint references columns in the
         // source's own table list (`tbl_d_n.col`), so it must be simplified

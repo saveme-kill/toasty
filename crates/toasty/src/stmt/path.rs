@@ -3,7 +3,7 @@ use crate::schema::Field;
 use std::{fmt, marker::PhantomData};
 use toasty_core::{
     schema::app::{ModelId, VariantId},
-    stmt::{self, Direction, OrderByExpr},
+    stmt::{self, OrderByExpr},
 };
 
 /// A typed path from a root model `T` to a field of type `U`.
@@ -336,10 +336,7 @@ impl<T, U> Path<T, U> {
     ///     .order_by(User::fields().name().asc());
     /// ```
     pub fn asc(self) -> OrderByExpr {
-        OrderByExpr {
-            expr: self.untyped.into_stmt(),
-            order: Some(Direction::Asc),
-        }
+        self.into_expr().asc()
     }
 
     /// Produce a descending [`OrderByExpr`] for this path.
@@ -357,10 +354,7 @@ impl<T, U> Path<T, U> {
     ///     .order_by(User::fields().name().desc());
     /// ```
     pub fn desc(self) -> OrderByExpr {
-        OrderByExpr {
-            expr: self.untyped.into_stmt(),
-            order: Some(Direction::Desc),
-        }
+        self.into_expr().desc()
     }
 }
 

@@ -201,6 +201,12 @@ fn refine_query(query: &stmt::Query, cx: &Cx<'_>, params: &mut [Param]) {
         _ => {}
     }
 
+    if let Some(order_by) = &query.order_by {
+        for key in &order_by.exprs {
+            synthesize(&key.expr, &cx, params);
+        }
+    }
+
     // Handle CTEs
     if let Some(with) = &query.with {
         for cte in &with.ctes {

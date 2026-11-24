@@ -225,6 +225,16 @@ impl stmt::Visit for Verify<'_, '_> {
     fn visit_stmt_query(&mut self, i: &stmt::Query) {
         stmt::visit::visit_stmt_query(self, i);
 
+        if let (Some(select), Some(order_by)) = (i.body.as_select(), &i.order_by) {
+            VerifyExpr {
+                schema: self.schema,
+                model: select.source.model_id_unwrap(),
+                capability: self.capability,
+                error: &mut *self.error,
+            }
+            .visit_order_by(order_by);
+        }
+
         self.verify_single_query(i);
         self.verify_offset_key_matches_order_by(i);
         self.verify_limit_is_integer_literal(i);
@@ -612,6 +622,14 @@ impl<'a> VerifyExpr<'a, '_> {
             | Or(_)
             | StartsWith(_)
             | Value(stmt::Value::Bool(_)) => {}
+            Reference(_) | Project(_) => match self.resolve_expr_path(expr) {
+                Some(PathTarget::Field(field)) => assert!(
+                    field.ty.as_primitive().is_some_and(|p| p.ty.is_bool()),
+                    "expected a boolean field: {expr:#?}"
+                ),
+                Some(PathTarget::Document) => {}
+                _ => panic!("Not a bool? {expr:#?}"),
+            },
             expr => panic!("Not a bool? {expr:#?}"),
         }
     }

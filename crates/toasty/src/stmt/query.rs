@@ -196,11 +196,11 @@ impl<T> Query<T> {
 
     /// Add a sort order to this query.
     ///
-    /// Pass an [`OrderByExpr`](toasty_core::stmt::OrderByExpr) obtained from
-    /// [`Path::asc`] or [`Path::desc`], or a tuple of them to sort by several
-    /// fields at once. Calling `order_by` multiple times appends each
-    /// expression to the existing order, so later calls act as tie-breakers
-    /// for earlier ones.
+    /// Call [`Path::asc`] or [`Path::desc`] to sort by a field, or [`Expr::asc`]
+    /// or [`Expr::desc`] to sort by a computed value on SQL databases.
+    /// Pass a tuple to sort by multiple keys. Calling `order_by` multiple times
+    /// appends each expression to the existing order, so later calls act as
+    /// tie-breakers for earlier ones.
     ///
     /// # Examples
     ///
@@ -226,13 +226,8 @@ impl<T> Query<T> {
         self
     }
 
-    /// Sets the sort order for this query overwriting existing ones.
-    ///
-    /// Pass an [`OrderByExpr`](toasty_core::stmt::OrderByExpr) obtained from
-    /// [`Path::asc`] or [`Path::desc`], or a tuple of them to sort by several
-    /// fields at once. Calling `order_by` multiple times appends each
-    /// expression to the existing order, so later calls act as tie-breakers
-    /// for earlier ones.
+    /// Replace this query's sort keys. Accepts the same ordering expressions
+    /// as [`Query::order_by`].
     ///
     /// # Examples
     ///
